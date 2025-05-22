@@ -1,6 +1,7 @@
-/pa1/
+/pa2/
 /.vscode/
 /debug_results/
+/corpus/corpus.jsonl
 __pycache__
 *.warc
 *.gz
