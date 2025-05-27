@@ -1,3 +1,4 @@
+import collections
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer 
@@ -23,7 +24,7 @@ class Tokenizer:
     # Initialize the stop words
     self.stop_words = set(stopwords.words('english'))
 
-  def tokenize(self, text: str) -> list:
+  def tokenize(self, text: str) -> dict[str, int]:
     """
     Tokenizes the input text into words using NLTK's word_tokenize function.
     
@@ -41,5 +42,14 @@ class Tokenizer:
 
     # Remove punctuation, convert to lowercase and stem the words
     tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.isalnum() and word not in self.stop_words]
-    
+
+    tokens = collections.Counter(tokens)
+
     return tokens
+
+if __name__ == "__main__":
+  tokenizer = Tokenizer()
+
+  text = "This is a test sentence, testing the tokenizer in a test case."
+  tokens = tokenizer.tokenize(text)
+  print(tokens)
