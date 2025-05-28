@@ -28,6 +28,7 @@ class IndexWriter:
         """
         with self.lock:
             file_id = self.index_id
+            print(f"Writing index {file_id} to disk.")
             self.index_id += 1
 
         index_file_path = os.path.join(self.index_path, f"index_{file_id}.json")
