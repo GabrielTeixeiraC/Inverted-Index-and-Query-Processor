@@ -1,14 +1,14 @@
 import os
-import json
 import sys
-from threading import Thread
+import json
 import time
 import psutil
-from multiprocessing import Process, Queue, cpu_count, Event
-from indexer.tokenizer import Tokenizer
+from multiprocessing import Event, Process, Queue, cpu_count
+from threading import Thread
 from indexer.arg_parser import parse_indexer_args
 from indexer.in_memory_indexer import InMemoryIndexer
 from indexer.index_writer import IndexWriter
+from indexer.tokenizer import Tokenizer
 
 ONE_MB = 1024 * 1024
 
@@ -18,9 +18,11 @@ def log(message: str):
   with open("indexer_log.txt", "a", encoding="utf-8") as log_file:
     log_file.write(formatted_message + "\n")
 
-def index_worker(tokenizer, writer, memory_limit, input_queue, stop_event, worker_id):
+def index_worker(index_path, memory_limit, input_queue, stop_event, worker_id):
   log(f"Process {worker_id} started indexing.")
+  tokenizer = Tokenizer()
   indexer = InMemoryIndexer(memory_limit)
+  writer = IndexWriter(index_path, worker_id)
   docs_processed = 0
   while not stop_event.is_set():
     try:
@@ -34,7 +36,7 @@ def index_worker(tokenizer, writer, memory_limit, input_queue, stop_event, worke
       limit_reached = indexer.index_document(doc['id'], tokens)
       docs_processed += 1
       if limit_reached:
-        log(f"Process {worker_id}: Memory limit reached, writing index {writer.index_id} to disk.")
+        log(f"Process {worker_id}: Memory limit reached, writing index {writer.index_id} to disk. TOtal memory used: {psutil.Process(os.getpid()).memory_info().rss / ONE_MB:.2f} MB")
         writer.write_to_disk(indexer.index)
         indexer.reset_index()
     log(f"Process {worker_id}: Documents processed so far: {docs_processed}")
@@ -84,36 +86,44 @@ class Indexer:
     self.memory_budget = int(self.soft_memory_threshold - self.get_memory_usage())
     if self.memory_budget <= 0:
       raise ValueError("Memory budget is too low, please increase the memory limit.")
-    self.tokenizer = Tokenizer()
-    self.index_writer = IndexWriter(self.index_path)
     with open("indexer_log.txt", 'w', encoding='utf-8') as f:
       f.write("Indexer log started.\n")
 
   def get_memory_usage(self) -> int:
     return psutil.Process(os.getpid()).memory_info().rss / ONE_MB
 
-  def stream_documents(self, batch_size: int = 1000):
+  def stream_documents(self, queue, batch_size: int = 1000, num_workers: int = 4):
     with open(self.corpus_path, 'r', encoding='utf-8') as f:
-      batch = []
-      for line in f:
-        batch.append(json.loads(line))
-        if len(batch) >= batch_size:
-          yield batch
-          batch = []
-      if batch:
-        yield batch
+        batch = []
+        for line in f:
+            batch.append(json.loads(line))
+            if len(batch) >= batch_size:
+                queue.put(batch)
+                batch = []
+                while queue.qsize() > 2 * num_workers:
+                    time.sleep(0.1)
+        if batch:
+            queue.put(batch)
+
+    for _ in range(num_workers):
+        queue.put(None)
+
 
   def run_multiprocessing_indexing(self, process, num_workers=4):
     input_queue = Queue(maxsize=8)
     stop_event = Event()
     processes = []
-    thread_memory_limit = self.memory_budget // num_workers
+    NEW_PROCESS_MB = 40
+    thread_functional_memory_limit_mb = (self.memory_budget // num_workers) - NEW_PROCESS_MB
+    if (thread_functional_memory_limit_mb <= 0):
+      raise ValueError("Memory budget is too low, please increase the memory limit.")
     for i in range(num_workers):
-      p = Process(target=index_worker, args=(self.tokenizer, self.index_writer, thread_memory_limit, input_queue, stop_event, i))
+      p = Process(target=index_worker, args=(self.index_path, thread_functional_memory_limit_mb, input_queue, stop_event, i))
+      log(f"Starting worker process {i} with total memory limit {thread_functional_memory_limit_mb + NEW_PROCESS_MB} MB and functional memory of {thread_functional_memory_limit_mb} MB.")
       p.start()
-      log(f"Starting worker process {p.pid} with memory limit {thread_memory_limit} MB.")
+      print(psutil.Process(p.pid).memory_info().rss / ONE_MB)
       processes.append(p)
-    monitor_proc = Thread(target=memory_monitor, args=(stop_event, main_process, ))
+    monitor_proc = Thread(target=memory_monitor, args=(stop_event, process, ))
     monitor_proc.start()
     self.stream_documents(input_queue, batch_size=1000, num_workers=num_workers)
     for p in processes:
