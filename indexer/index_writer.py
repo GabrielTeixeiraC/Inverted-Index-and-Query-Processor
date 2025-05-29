@@ -28,10 +28,13 @@ class IndexWriter:
         self.index_id += 1
 
         index_file_path = os.path.join(
-            self.index_path, f"index_{self.worker_id}_{file_id}.json"
+            self.index_path, f"index_{self.worker_id}_{file_id}.jsonl"
         )
 
         with open(index_file_path, "w", encoding="utf-8") as f:
-            json.dump(index, f)
+            for token in sorted(index.keys()):
+                postings = index[token]
+                json_line = json.dumps({"token": token, "postings": postings})
+                f.write(json_line + "\n")
 
         return index_file_path

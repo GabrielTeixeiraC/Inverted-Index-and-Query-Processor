@@ -6,7 +6,7 @@ def parse_indexer_args() -> tuple:
     tuple: (memory_limit, corpus_path, index_path)
   """
   # Initialize the argument parser
-  parser = argparse.ArgumentParser(description="Web Crawler Argument Parser")
+  parser = argparse.ArgumentParser(description="Indexer Argument Parser")
 
   parser.add_argument("-m", "--memory_limit", type=int, required=True, help="The memory available to the indexer in MB")
   parser.add_argument("-c", "--corpus_path", type=str, required=True, help="The path to the corpus file to be indexed")

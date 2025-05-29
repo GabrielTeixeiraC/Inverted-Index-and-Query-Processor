@@ -1,3 +1,4 @@
+import collections
 import os
 import sys
 import json
@@ -7,8 +8,9 @@ from multiprocessing import Event, Process, Queue, cpu_count
 from threading import Thread
 from indexer.arg_parser import parse_indexer_args
 from indexer.in_memory_indexer import InMemoryIndexer
+from indexer.index_merger import IndexMerger
 from indexer.index_writer import IndexWriter
-from indexer.tokenizer import Tokenizer
+from shared.tokenizer import Tokenizer
 
 ONE_MB = 1024 * 1024
 
@@ -33,7 +35,8 @@ def index_worker(index_path, memory_limit, input_queue, stop_event, worker_id):
       break
     for doc in batch:
       tokens = tokenizer.tokenize(doc['text'])
-      limit_reached = indexer.index_document(doc['id'], tokens)
+      tokens_counter = collections.Counter(tokens)
+      limit_reached = indexer.index_document(doc['id'], tokens_counter)
       docs_processed += 1
       if limit_reached:
         log(f"Process {worker_id}: Memory limit reached, writing index {writer.index_id} to disk. TOtal memory used: {psutil.Process(os.getpid()).memory_info().rss / ONE_MB:.2f} MB")
@@ -88,6 +91,8 @@ class Indexer:
       raise ValueError("Memory budget is too low, please increase the memory limit.")
     with open("indexer_log.txt", 'w', encoding='utf-8') as f:
       f.write("Indexer log started.\n")
+    os.makedirs(self.index_path, exist_ok=True)
+    self.index_merger = IndexMerger(self.index_path)
 
   def get_memory_usage(self) -> int:
     return psutil.Process(os.getpid()).memory_info().rss / ONE_MB
@@ -128,6 +133,9 @@ class Indexer:
     self.stream_documents(input_queue, batch_size=1000, num_workers=num_workers)
     for p in processes:
       p.join()
+    print("All worker processes have finished indexing.")
+    self.index_merger.merge()
+    log("Index merging completed.")
     stop_event.set()
     monitor_proc.join()
 
