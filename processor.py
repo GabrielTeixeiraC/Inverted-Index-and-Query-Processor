@@ -42,13 +42,18 @@ class Processor:
     
   def daat(self, query, index, k=10):
     results = []
-    targets = {docid for term in self.tokenizer.tokenize(query) for docid in index.get(term, {})}
+    terms = self.tokenizer.tokenize(query)
+    target_docids = set()
+    for term in terms:
+      possible_docids = {posting[0] for posting in index.get(term, [])}
+      
+    docids = {posting[0] for term in self.tokenizer.tokenize(query) for posting in index.get(term, {})}
     lists = [index[term] for term in self.tokenizer.tokenize(query) if term in index]
-    for target in targets:
+    for docid in docids:
       score = 0
       for posting in lists:
-        for (docid, frequency) in posting:
-          if docid == target:
+        for (posting_docid, frequency) in posting:
+          if posting_docid == docid:
             score += frequency
-        results.heappush(results, (score, target))
+        results.heappush(results, (score, docid))
     return heapq.nlargest(k, results)
