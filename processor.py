@@ -1,65 +1,72 @@
 import heapq
 import json
 import os
+from typing import List, Dict, Set, Tuple
+
 from processor.arg_parser import parse_processor_args
 from processor.scorer import Scorer
 from shared.tokenizer import Tokenizer
 
 class Processor:
   def __init__(self):
+    """
+    Initializes the Processor, loading the index, queries, tokenizer,
+    lexicon, and inverted index. Also prepares the scorer.
+    """
     self.index_file_path, self.queries_file_path, self.ranker = parse_processor_args()
+    self.index_dir = os.path.dirname(self.index_file_path)
+
     self.tokenizer = Tokenizer()
-    self.index_path = os.path.dirname(self.index_file_path)
-    indexing_statistics_path = os.path.join(self.index_path, "indexing_statistics.json")
-    total_docs = 0
-    with open(indexing_statistics_path, 'r', encoding='utf-8') as f:
+
+    self.total_docs, self.avg_tokens_per_doc = self._load_indexing_statistics()
+    self.queries = self._load_queries()
+    self.query_tokens_list = [self.tokenizer.tokenize(q) for q in self.queries]
+
+    needed_tokens = set().union(*self.query_tokens_list)
+
+    self.lexicon = self._load_jsonl_with_filter("lexicon.jsonl", key='token', keys_filter=needed_tokens)
+    self.inverted_index = self._load_inverted_index(needed_tokens)
+
+    self.scorer = Scorer(
+      self.lexicon,
+      {},  # Will load document index later
+      self.total_docs,
+      self.avg_tokens_per_doc
+    )
+
+  def _load_indexing_statistics(self) -> Tuple[int, float]:
+    """
+    Loads indexing statistics including total document count and 
+    average tokens per document.
+
+    Returns:
+      Tuple of (total_docs, avg_tokens_per_doc)
+    """
+    stats_path = os.path.join(self.index_dir, "indexing_statistics.json")
+    with open(stats_path, 'r', encoding='utf-8') as f:
       stats = json.load(f)
-      total_docs = stats.get("Number of Documents", 0)
-      average_tokens_per_document = stats.get("Average Tokens per Document", 0)
+    return stats.get("Number of Documents", 0), stats.get("Average Tokens per Document", 0)
 
+  def _load_queries(self) -> List[str]:
+    """
+    Loads queries from the queries file.
 
-
-    self.queries = self.load_queries()
-    self.queries_tokens = self.get_queries_tokens()
-    unique_query_tokens = self.get_unique_query_tokens() 
-    lexicon = self.load_lexicon(unique_query_tokens)
-    self.index = self.load_index_for_queries(unique_query_tokens)
-    self.target_docids = self.get_queries_docids()
-    self.all_target_docids = set()
-    for docids in self.target_docids:
-      self.all_target_docids.update(docids)
-  
-    print(f"Target docids: {self.all_target_docids}")
-    document_index = self.load_document_index()
-    print(document_index)
-    self.scorer = Scorer(lexicon, document_index, total_docs, average_tokens_per_document)
-
-  def load_queries(self):
+    Returns:
+      List of query strings.
+    """
     with open(self.queries_file_path, 'r', encoding='utf-8') as f:
-      queries = [line.strip() for line in f if line.strip()]
-    return queries
-  
-  def get_unique_query_tokens(self):
-    unique_query_tokens = set()
-    for query in self.queries:
-      tokens = self.tokenizer.tokenize(query)
-      unique_query_tokens.update(tokens)
-    return unique_query_tokens
-  
-  def get_queries_tokens(self):
-    queries_tokens = []
-    for query in self.queries:
-      tokens = self.tokenizer.tokenize(query)
-      queries_tokens.append(tokens)
-    return queries_tokens
+      return [line.strip() for line in f if line.strip()]
 
-  def get_queries_docids(self):
-    queries_docids = []
-    for tokens_list in self.queries_tokens:
-      queries_docids.append(self.get_query_target_docids(tokens_list))
-    return queries_docids
+  def _load_inverted_index(self, needed_tokens: Set[str]) -> Dict[str, List[Tuple[str, int]]]:
+    """
+    Loads the inverted index filtering by needed tokens.
 
-  def load_index_for_queries(self, needed_tokens):
+    Args:
+      needed_tokens: Set of tokens required.
+
+    Returns:
+      Dictionary mapping token to list of (docid, frequency).
+    """
     index = {}
     with open(self.index_file_path, 'r', encoding='utf-8') as f:
       for line in f:
@@ -67,75 +74,129 @@ class Processor:
         if token in needed_tokens:
           index[token] = postings
     return index
-  
-  def load_lexicon(self, needed_tokens):
-    lexicon = {}
-    with open(os.path.join(self.index_path, "lexicon.jsonl"), 'r', encoding='utf-8') as f: 
+
+  def _load_jsonl_with_filter(
+    self,
+    filename: str,
+    key: str,
+    keys_filter: Set[str]
+  ) -> Dict[str, Dict]:
+    """
+    Loads a JSONL file and filters its contents by key.
+
+    Args:
+      filename: Name of the JSONL file.
+      key: Key to filter on.
+      keys_filter: Set of keys to keep.
+
+    Returns:
+      Dictionary mapping the key to its JSON object.
+    """
+    path = os.path.join(self.index_dir, filename)
+    result = {}
+    with open(path, 'r', encoding='utf-8') as f:
       for line in f:
-        token_info = json.loads(line)
-        if token_info['token'] in needed_tokens:
-          lexicon[token_info['token']] = token_info
-    return lexicon
-  
-  def load_document_index(self):
-    document_index = {}
-    with open(os.path.join(self.index_path, "document_index.jsonl"), 'r', encoding='utf-8') as f:
-      for i, line in enumerate(f):
-        if str(i + 1).zfill(7) in self.all_target_docids:
-          doc_info = json.loads(line)
-          document_index[doc_info['id']] = doc_info
-    return document_index
-  
-  def score_document(self, docid, tokens):
-    score = 0
+        item = json.loads(line)
+        if item[key] in keys_filter:
+          result[item[key]] = item
+    return result
+
+  def _get_matching_docids(self, tokens: List[str]) -> Set[str]:
+    """
+    Retrieves document IDs that contain all the tokens in the query
+    (AND operation over posting lists).
+
+    Args:
+      tokens: List of tokens in the query.
+
+    Returns:
+      Set of matching document IDs.
+    """
+    postings = [set(docid for docid, _ in self.inverted_index.get(token, [])) for token in tokens]
+    return set.intersection(*postings) if postings else set()
+
+  def _score_document(self, docid: str, tokens: List[str]) -> float:
+    """
+    Computes the relevance score of a document for a given query.
+
+    Args:
+      docid: Document ID.
+      tokens: List of tokens in the query.
+
+    Returns:
+      Document score as a float.
+    """
+    score = 0.0
     for token in tokens:
-        postings = self.index.get(token, [])
-        for posting_docid, frequency in postings:
-            if posting_docid == docid:
-                if self.ranker == "tfidf":
-                    score += self.scorer.tfidf(token, frequency)
-                elif self.ranker == "bm25":
-                    score += self.scorer.bm25(token, frequency, docid)
+      postings = self.inverted_index.get(token, [])
+      for posting_docid, freq in postings:
+        if posting_docid == docid:
+          if self.ranker == "tfidf":
+            score += self.scorer.tfidf(token, freq)
+          elif self.ranker == "bm25":
+            score += self.scorer.bm25(token, freq, docid)
     return score
 
-  def display_results(self, query, results):
-    result = {"Query": query, "Results": []}
-    for score, docid in results:
-      result["Results"].append({"ID": docid, "Score": score})
+  def _rank_documents(
+    self, 
+    query_tokens: List[str], 
+    docids: Set[str], 
+    k: int = 10
+  ) -> List[Tuple[float, str]]:
+    """
+    Ranks documents based on their scores for a given query.
 
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    Args:
+      query_tokens: List of tokens from the query.
+      docids: Set of candidate document IDs.
+      k: Number of top results to return.
+
+    Returns:
+      List of tuples (score, docid) sorted by score descending.
+    """
+    heap = []
+    for docid in docids:
+      score = self._score_document(docid, query_tokens)
+      heapq.heappush(heap, (score, docid))
+    return heapq.nlargest(k, heap)
+
+  def _display_results(self, query: str, results: List[Tuple[float, str]]):
+    """
+    Prints the results for a query in JSON format.
+
+    Args:
+      query: The original query string.
+      results: List of (score, docid) tuples.
+    """
+    output = {
+      "Query": query,
+      "Results": [{"ID": docid, "Score": score} for score, docid in results]
+    }
+    print(json.dumps(output, indent=2, ensure_ascii=False))
 
   def process_queries(self):
+    """
+    Main entry point to process all queries:
+    - Finds matching documents.
+    - Loads document metadata.
+    - Ranks documents.
+    - Displays the results.
+    """
+    all_docids = set().union(*(self._get_matching_docids(tokens) for tokens in self.query_tokens_list))
+
+    self.scorer.document_index = self._load_document_index(all_docids)
+
     for i, query in enumerate(self.queries):
-        results = self.rank_daat(i)
-        self.display_results(query, results)
-    return results
+      tokens = self.query_tokens_list[i]
+      docids = self._get_matching_docids(tokens)
 
-  def get_query_target_docids(self, tokens):
-    target_docids = set()
-    for i, token in enumerate(tokens):
-      if i == 0:
-        target_docids = {posting[0] for posting in self.index.get(token, [])}
-      else:
-        possible_docids = {posting[0] for posting in self.index.get(token, [])}
-        target_docids.intersection_update(possible_docids)
+      if not docids:
+        self._display_results(query, [])
+        continue
 
-      if not target_docids:
-        break
-    return target_docids
-
-
-  def rank_daat(self, query_index, k=10):
-    results = []
-    query_target_docids = self.target_docids[query_index]
-
-    for target_docid in query_target_docids:
-      score = self.score_document(target_docid, self.queries_tokens[query_index])
-      heapq.heappush(results, (score, target_docid))
-    return heapq.nlargest(k, results)
-  
+      results = self._rank_documents(tokens, docids)
+      self._display_results(query, results)
 
 if __name__ == "__main__":
   processor = Processor()
-  results = processor.process_queries()
-  print(results)
+  processor.process_queries()
