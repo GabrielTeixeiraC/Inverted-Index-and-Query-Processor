@@ -42,7 +42,7 @@ class Tokenizer:
     tokens = word_tokenize(text)
 
     # Remove punctuation, convert to lowercase and stem the words
-    tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.isalnum() and word not in self.stop_words and len(word) > 2]
+    tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.isalnum() and word.lower() not in self.stop_words and len(word) > 2]
 
     return tokens
 

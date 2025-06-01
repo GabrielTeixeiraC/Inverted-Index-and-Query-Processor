@@ -21,30 +21,50 @@ def log(message: str):
     log_file.write(formatted_message + "\n")
 
 def index_worker(index_path, memory_limit, input_queue, stop_event, worker_id):
-  log(f"Process {worker_id} started indexing.")
-  indexer = InMemoryIndexer(memory_limit)
-  writer = IndexWriter(index_path, worker_id)
-  docs_processed = 0
-  while not stop_event.is_set():
-    try:
-      batch = input_queue.get(timeout=1)
-    except Exception:
-      continue
-    if batch is None:
-      break
-    for doc_info in batch:
-      docid, tokens = doc_info["id"], doc_info["tokens"]
-      tokens_counter = collections.Counter(tokens)
-      limit_reached = indexer.index_document(docid, tokens_counter)
-      docs_processed += 1
-      if limit_reached:
-        log(f"Process {worker_id}: Memory limit reached, writing index {writer.index_id} to disk. TOtal memory used: {psutil.Process(os.getpid()).memory_info().rss / ONE_MB:.2f} MB")
+    log(f"Process {worker_id} started indexing.")
+    indexer = InMemoryIndexer(memory_limit)
+    writer = IndexWriter(index_path, worker_id)
+    tokenizer = Tokenizer()
+
+    docs_processed = 0
+    total_tokens = 0
+
+    while not stop_event.is_set():
+        try:
+            batch = input_queue.get(timeout=1)
+        except Exception:
+            continue
+        if batch is None:
+            break
+
+        for doc_info in batch:
+            docid, text = doc_info["id"], doc_info["text"]
+            tokens = tokenizer.tokenize(text)
+            total_tokens += len(tokens)
+
+            tokens_counter = collections.Counter(tokens)
+            limit_reached = indexer.index_document(docid, tokens_counter)
+            docs_processed += 1
+
+            if limit_reached:
+                log(f"Process {worker_id}: Memory limit reached, writing index {writer.index_id} to disk. Current memory: {psutil.Process(os.getpid()).memory_info().rss / ONE_MB:.2f} MB")
+                writer.write_to_disk(indexer.index)
+                indexer.reset_index()
+
+        log(f"Process {worker_id}: Documents processed so far: {docs_processed}")
+
+    if indexer.index:
         writer.write_to_disk(indexer.index)
-        indexer.reset_index()
-    log(f"Process {worker_id}: Documents processed so far: {docs_processed}")
-  if indexer.index:
-    writer.write_to_disk(indexer.index)
-  log(f"Process {worker_id} finished indexing. Total documents processed: {docs_processed}")
+
+    # ✅ Write worker stats
+    worker_stats = {
+        "docs_processed": docs_processed,
+        "total_tokens": total_tokens
+    }
+    with open(os.path.join(index_path, f'worker_{worker_id}_stats.json'), 'w') as f:
+        json.dump(worker_stats, f)
+
+    log(f"Process {worker_id} finished indexing. Total documents processed: {docs_processed}")
 
 
 def memory_monitor(stop_event, process, interval=1.0, log_file="memory_usage_log.txt"):
@@ -98,8 +118,6 @@ class Indexer:
 
   def stream_documents(self, queue, batch_size: int = 1000, num_workers: int = 4):
     total_docs = 0
-    average_doc_length = 0
-    tokenizer = Tokenizer()
 
     doc_index_path = os.path.join(self.index_path, 'document_index.jsonl')
     with open(self.corpus_path, 'r', encoding='utf-8') as f_corpus, \
@@ -109,18 +127,15 @@ class Indexer:
         for line in f_corpus:
             doc = json.loads(line)
 
-            tokens = tokenizer.tokenize(doc["text"])
-            average_doc_length += len(tokens)
             doc_metadata = {
                 "id": doc["id"],
                 "doc_length": len(doc["text"]),
-                "num_tokens": len(tokens),
             }
-
             f_doc_index.write(json.dumps(doc_metadata) + "\n")
 
-            batch.append({"id": doc["id"], "tokens": tokens})
+            batch.append({"id": doc["id"], "text": doc["text"]})
             total_docs += 1
+
             if len(batch) >= batch_size:
                 queue.put(batch)
                 batch = []
@@ -131,8 +146,10 @@ class Indexer:
     for _ in range(num_workers):
         queue.put(None)
 
-    return total_docs, round(average_doc_length / total_docs) if total_docs > 0 else 0
-  def collect_statistics(self, start_time, total_docs, average_doc_length):
+    return total_docs
+
+
+  def collect_statistics(self, start_time, total_docs):
     index_file = os.path.join(self.index_path, 'final_inverted_index.jsonl')
     index_size = os.path.getsize(index_file) / ONE_MB  # in MB
 
@@ -146,19 +163,32 @@ class Indexer:
             total_postings += len(postings)
 
     avg_list_size = total_postings / num_lists if num_lists > 0 else 0
+
+    total_tokens = 0
+    for filename in os.listdir(self.index_path):
+        if filename.startswith('worker_') and filename.endswith('_stats.json'):
+            with open(os.path.join(self.index_path, filename), 'r') as f:
+                stats = json.load(f)
+                total_tokens += stats.get("total_tokens", 0)
+
+    average_doc_length = round(total_tokens / total_docs) if total_docs > 0 else 0
     elapsed_time = time.time() - start_time
 
     stats = {
-        "Index Size": round(index_size),
-        "Elapsed Time": round(elapsed_time),
+        "Index Size (MB)": round(index_size, 2),
+        "Elapsed Time (s)": round(elapsed_time, 2),
         "Number of Lists": num_lists,
         "Average List Size": round(avg_list_size, 2),
+        "Number of Documents": total_docs,
+        "Average Tokens per Document": average_doc_length,
     }
-    stats["Number of Documents"] = total_docs
-    stats["Average Number of Tokens per Document"] = average_doc_length
+
     with open(os.path.join(self.index_path, 'indexing_statistics.json'), 'w', encoding='utf-8') as f:
         json.dump(stats, f, indent=2)
 
+    for filename in os.listdir(self.index_path):
+        if filename.startswith('worker_') and filename.endswith('_stats.json'):
+            os.remove(os.path.join(self.index_path, filename))
 
   def run_multiprocessing_indexing(self, process, num_workers=4):
     input_queue = Queue(maxsize=8)
@@ -180,7 +210,7 @@ class Indexer:
     monitor_proc.start()
 
     start_time = time.time()
-    total_docs, average_doc_length = self.stream_documents(input_queue, batch_size=1000, num_workers=num_workers)
+    total_docs = self.stream_documents(input_queue, batch_size=1000, num_workers=num_workers)
 
     for p in processes:
         p.join()
@@ -190,7 +220,7 @@ class Indexer:
     stop_event.set()
     monitor_proc.join()
 
-    self.collect_statistics(start_time, total_docs, average_doc_length)
+    self.collect_statistics(start_time, total_docs)
 if __name__ == "__main__":
   indexer = Indexer()
   stop_event = Event()
