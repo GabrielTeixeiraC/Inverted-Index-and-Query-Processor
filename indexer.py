@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 import time
 import psutil
 import collections
@@ -36,21 +37,24 @@ def index_worker(
   tokenizer = Tokenizer()
 
   total_tokens = 0
-
+  total_documents = 0
   # Create a document index file for this worker
   document_index_path = os.path.join(index_dir, f'document_index_worker_{worker_id}.jsonl')
   with open(document_index_path, 'a', encoding='utf-8') as document_index_fp:
     while not stop_event.is_set():
       try:
         # Get a batch of documents from the input queue
+        print(f"[Worker {worker_id}] Waiting for input...")
         batch = input_queue.get(timeout=1)
       except Exception:
         continue
-
       if batch is None:
         break
 
       for doc in batch:
+        if total_documents % 1000 == 0:
+          print(f"\r[Streamer] {total_documents} documents processed...")
+        total_documents += 1
         docid = doc["id"]
         text = doc["text"]
 
@@ -78,7 +82,7 @@ def index_worker(
     # Write any remaining index data to disk
     if indexer.index:
       writer.write_to_disk(indexer.index)
-
+  print(f"\n[Worker {worker_id}] Processed {total_documents} documents with {total_tokens} tokens.")
   # Write worker statistics to a JSON file. This is done here to avoid tokenizing twice.
   with open(os.path.join(index_dir, f'worker_{worker_id}_stats.json'), 'w') as stats_fp:
     json.dump({
@@ -86,6 +90,7 @@ def index_worker(
     }, stats_fp)
 
   writer.close()
+  print(f"\n[Worker {worker_id}] Finished processing {total_documents} documents with {total_tokens} tokens.")
 
 class Indexer:
   """
@@ -114,7 +119,8 @@ class Indexer:
   def _stream_documents(
     self,
     queue: Queue,
-    batch_size: int
+    batch_size: int,
+    number_of_workers: int
   ) -> int:
     """
     Streams documents from the corpus into the input queue in batches.
@@ -146,6 +152,10 @@ class Indexer:
     # If there are any remaining documents in the batch, put them in the queue
       if batch:
         queue.put(batch)
+
+    # Signal the workers that there are no more documents
+    for _ in range(number_of_workers):
+      queue.put(None)
 
     return total_documents
   
@@ -203,26 +213,26 @@ class Indexer:
       if file.startswith('worker_') and file.endswith('_stats.json'):
         os.remove(os.path.join(self.index_dir, file))
 
-  def run(self, num_workers: Optional[int] = None) -> None:
+  def run(self, number_of_workers: Optional[int] = None) -> None:
     """
     Runs the full indexing pipeline using multiprocessing.
 
     Args:
-      num_workers (Optional[int]): Number of worker processes. Defaults to CPU count or max 8.
+      number_of_workers (Optional[int]): Number of worker processes. Defaults to CPU count or max 8.
     """
-    num_workers = num_workers or min(cpu_count(), 8)
+    number_of_workers = number_of_workers or min(cpu_count(), 8)
 
     input_queue = Queue(maxsize=16)
     stop_event = Event()
     processes: List[Process] = []
 
     OVERHEAD_MB_PER_PROCESS = 40
-    functional_memory_budget_per_worker = (self.memory_budget_mb // num_workers) - OVERHEAD_MB_PER_PROCESS
+    functional_memory_budget_per_worker = (self.memory_budget_mb // number_of_workers) - OVERHEAD_MB_PER_PROCESS
     if functional_memory_budget_per_worker <= 0:
       raise ValueError("Memory budget too low.")
 
     # Start worker processes
-    for worker_id in range(num_workers):
+    for worker_id in range(number_of_workers):
       process = Process(
         target=index_worker,
         args=(self.index_dir, functional_memory_budget_per_worker, input_queue, worker_id, stop_event)
@@ -231,18 +241,20 @@ class Indexer:
       processes.append(process)
 
     start_time = time.time()
-    total_documents = self._stream_documents(input_queue, batch_size=1000)
+    total_documents = self._stream_documents(input_queue, batch_size=1000, number_of_workers=number_of_workers)
 
     for process in processes:
       process.join()
 
+    print("Merging inverted indexes...")
     self.index_merger.merge()
+    print("Merging document indexes...")
     self.index_merger.merge_document_indexes()
-
     elapsed_time = time.time() - start_time
 
     # Signal workers to stop
     stop_event.set()
+    print("Collecting statistics...")
     self._collect_statistics(elapsed_time, total_documents)
 
 if __name__ == "__main__":

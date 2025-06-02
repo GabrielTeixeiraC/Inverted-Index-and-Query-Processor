@@ -17,8 +17,6 @@ class Tokenizer:
     """
     Initializes the Tokenizer class.
     """
-    # Ensure that the NLTK tokenizer is downloaded
-    
     # Initialize the stemmer
     self.stemmer = SnowballStemmer('english')
     
@@ -45,10 +43,3 @@ class Tokenizer:
     tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.isalnum() and word.lower() not in self.stop_words and len(word) > 2]
 
     return tokens
-
-if __name__ == "__main__":
-  tokenizer = Tokenizer()
-
-  text = "This is a test sentence, testing the tokenizer in a test case."
-  tokens = tokenizer.tokenize(text)
-  print(tokens)

@@ -18,7 +18,7 @@ class IndexMerger:
     self.file_pointers: List[TextIO] = []
     self.heap: List[Tuple[str, List[Tuple[int, int]], TextIO]] = []
 
-  def _read_next_token(self, fp: TextIO) -> Optional[Tuple[str, List[Tuple[int, int]]]]:
+  def _read_next_token_data(self, fp: TextIO) -> Optional[Tuple[str, List[Tuple[int, int]]]]:
     """
     Reads the next token and its postings list from a JSONL file.
 
@@ -47,7 +47,7 @@ class IndexMerger:
     
     self.file_pointers = [open(f, 'r', encoding='utf-8') for f in partial_index_files]
     for fp in self.file_pointers:
-      token_data = self._read_next_token(fp)
+      token_data = self._read_next_token_data(fp)
       if token_data:
         token, postings = token_data
         heapq.heappush(self.heap, (token, postings, fp))
@@ -67,9 +67,10 @@ class IndexMerger:
           _, more_postings, other_fp = heapq.heappop(self.heap)
           merged_postings.extend(more_postings)
 
-          next_token = self.read_next_token(other_fp)
-          if next_token:
-            heapq.heappush(self.heap, (*next_token, other_fp))
+          next_token_data = self._read_next_token_data(other_fp)
+          if next_token_data:
+            next_token, next_postings = next_token_data
+            heapq.heappush(self.heap, (next_token, next_postings, other_fp))
         
         # Sort merged postings by document ID        
         merged_postings.sort(key=lambda x: x[0])
@@ -89,9 +90,10 @@ class IndexMerger:
         
         lexicon_fp.write(json.dumps(lexicon_entry) + '\n')
 
-        next_token = self.read_next_token(fp)
-        if next_token:
-          heapq.heappush(self.heap, (*next_token, fp))
+        next_token_data = self._read_next_token_data(fp)
+        if next_token_data:
+          next_token, next_postings = next_token_data
+          heapq.heappush(self.heap, (next_token, next_postings, fp))
 
     self._cleanup_files(self.file_pointers)
 
@@ -101,8 +103,8 @@ class IndexMerger:
     into a single sorted document index file.
     """
     document_index_files = [
-      os.path.join(self.index_path, f)
-      for f in os.listdir(self.index_path)
+      os.path.join(self.index_dir, f)
+      for f in os.listdir(self.index_dir)
       if f.startswith('document_index_worker_') and f.endswith('.jsonl')
     ]
 
@@ -129,7 +131,6 @@ class IndexMerger:
         if line:
           next_doc = json.loads(line)
           heapq.heappush(heap, (next_doc['id'], next_doc, fp))
-    
     self._cleanup_files(file_pointers)
 
   def _cleanup_files(self, file_pointers: List[TextIO]) -> None:
