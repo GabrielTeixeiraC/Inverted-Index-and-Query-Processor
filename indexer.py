@@ -108,7 +108,13 @@ class Indexer:
       raise ValueError("Memory budget is too low. Increase memory limit.")
 
     os.makedirs(self.index_dir, exist_ok=True)
-    self.index_merger = IndexMerger(self.index_dir)
+
+    self.final_index_path = os.path.join(self.index_dir, 'final_inverted_index.jsonl')
+    self.indexing_statistics_path = os.path.join(self.index_dir, 'indexing_statistics.json')
+    self.document_index_path = os.path.join(self.index_dir, 'document_index.jsonl')
+    self.lexicon_path = os.path.join(self.index_dir, 'lexicon.jsonl')
+
+    self.index_merger = IndexMerger(self.index_dir, self.final_index_path, self.document_index_path, self.lexicon_path)
 
   def _get_memory_usage(self) -> float:
     """
@@ -159,27 +165,28 @@ class Indexer:
 
     return total_documents
   
-  def _collect_statistics(self, elapsed_time: float, total_documents: int) -> None:
+  def _collect_statistics(self, total_postings: int, number_of_lists: int, elapsed_time: float, total_documents: int) -> None:
     """
     Collects indexing statistics and saves them to disk.
 
     Args:
+      total_postings (int): Total number of postings in the index.
+      number_of_lists (int): Total number of unique token lists in the index.
       elapsed_time (float): Total indexing time in seconds.
       total_documents (int): Total number of documents indexed.
     """
-    index_file = os.path.join(self.index_dir, 'final_inverted_index.jsonl')
-    index_size = os.path.getsize(index_file) / ONE_MB
+    stats = {}
+    index_size = os.path.getsize(self.final_index_path) / ONE_MB
+    stats["Index Size"] = round(index_size, 2)
 
-    number_of_lists = 0
-    total_postings = 0
-
-    with open(index_file, 'r', encoding='utf-8') as index_fp:
-      for line in index_fp:
-        number_of_lists += 1
-        postings = json.loads(line)['postings']
-        total_postings += len(postings)
+    stats["Elapsed Time"] = round(elapsed_time, 2)
+    stats["Number of Lists"] = number_of_lists
 
     average_list_size = total_postings / number_of_lists if number_of_lists else 0
+    stats["Average List Size"] = round(average_list_size, 2)
+
+    # Print the assignment's required statistics
+    print(stats)
 
     total_tokens = 0
     for file in os.listdir(self.index_dir):
@@ -190,22 +197,12 @@ class Indexer:
 
     average_tokens_per_document = round(total_tokens / total_documents) if total_documents else 0
 
-    stats = {
-      "Index Size": round(index_size, 2),
-      "Elapsed Time": round(elapsed_time, 2),
-      "Number of Lists": number_of_lists,
-      "Average List Size": round(average_list_size, 2),
-    }
-
-    # Print the assignment's required statistics
-    print(stats)
-
     # Save other useful statistics
     stats["Number of Documents"] = total_documents
     stats["Average Tokens per Document"] = average_tokens_per_document
 
     # Write the statistics to a JSON file
-    with open(os.path.join(self.index_dir, 'indexing_statistics.json'), 'w', encoding='utf-8') as stats_fp:
+    with open(self.indexing_statistics_path, 'w', encoding='utf-8') as stats_fp:
       json.dump(stats, stats_fp, indent=2)
 
     # Clean worker statistics files
@@ -247,7 +244,7 @@ class Indexer:
       process.join()
 
     print("Merging inverted indexes...")
-    self.index_merger.merge()
+    total_postings, number_of_lists = self.index_merger.merge()
     print("Merging document indexes...")
     self.index_merger.merge_document_indexes()
     elapsed_time = time.time() - start_time
@@ -255,7 +252,7 @@ class Indexer:
     # Signal workers to stop
     stop_event.set()
     print("Collecting statistics...")
-    self._collect_statistics(elapsed_time, total_documents)
+    self._collect_statistics(total_postings, number_of_lists, elapsed_time, total_documents)
 
 if __name__ == "__main__":
   indexer = Indexer()
