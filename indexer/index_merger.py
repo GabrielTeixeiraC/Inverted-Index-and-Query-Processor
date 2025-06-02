@@ -140,7 +140,7 @@ class IndexMerger:
     ]
 
     file_pointers = []
-    heap: List[Tuple[int, Dict, TextIO]] = []
+    heap: List[Tuple[str, Dict, TextIO]] = []
 
     for file in document_index_files:
       fp = open(file, 'r', encoding='utf-8')

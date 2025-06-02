@@ -6,6 +6,7 @@ from typing import List, Dict, Set, Tuple
 from processor.arg_parser import parse_processor_args
 from processor.scorer import Scorer
 from shared.tokenizer import Tokenizer
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class Processor:
   def __init__(self):
@@ -132,7 +133,7 @@ class Processor:
       for posting_docid, frequency in postings:
         if posting_docid == docid:
           if self.ranker == "tfidf":
-            score += self.scorer.compute_tfidf(token, frequency)
+            score += self.scorer.compute_tfidf(token, frequency, docid)
           elif self.ranker == "bm25":
             score += self.scorer.compute_bm25(token, frequency, docid)
     return score
@@ -174,32 +175,44 @@ class Processor:
     }
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
+  def _process_single_query(self, i: int) -> Tuple[str, List[Tuple[float, str]]]:
+    """
+    Processes a single query by index.
+
+    Args:
+      i: Index of the query in the query list.
+
+    Returns:
+      Tuple of (query string, list of (score, docid) results).
+    """
+    query = self.queries[i]
+    tokens = self.query_tokens_list[i]
+    docids = self._get_matching_docids(tokens)
+
+    if not docids:
+        return query, []
+
+    results = self._rank_documents(tokens, docids)
+    return query, results
+  
   def process_queries(self):
     """
-    Main entry point to process all queries:
-    - Finds matching documents.
-    - Loads document metadata.
-    - Ranks documents.
-    - Displays the results.
+    Processes all queries in parallel using threads.
     """
     all_docids = set().union(*(self._get_matching_docids(tokens) for tokens in self.query_tokens_list))
 
     self.scorer.document_index = self._load_jsonl_with_filter(
-      "document_index.jsonl",
-      key='id',
-      keys_filter=all_docids
+        "document_index.jsonl",
+        key='id',
+        keys_filter=all_docids
     )
 
-    for i, query in enumerate(self.queries):
-      tokens = self.query_tokens_list[i]
-      docids = self._get_matching_docids(tokens)
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        futures = [executor.submit(self._process_single_query, i) for i in range(len(self.queries))]
 
-      if not docids:
-        self._display_results(query, [])
-        continue
-
-      results = self._rank_documents(tokens, docids)
-      self._display_results(query, results)
+        for future in as_completed(futures):
+            query, results = future.result()
+            self._display_results(query, results)
 
 if __name__ == "__main__":
   processor = Processor()

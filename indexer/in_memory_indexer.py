@@ -30,7 +30,7 @@ class InMemoryIndexer:
     # (40 bytes for the tuple itself and 2 * 8 bytes for the integers pointers).
     # Therefore, the total size in bytes is: 56 + 2 * 28 = 112 bytes.
     self.entry_size = sys.getsizeof((0, 0)) + 2 * sys.getsizeof(0)
-    
+    print(f"Estimated entry size: {self.entry_size} bytes") 
     # Calculate the approximate maximum number of entries that can be stored in the
     # index before reaching the memory budget.
     self.entry_count = 0

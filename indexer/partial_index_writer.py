@@ -2,7 +2,7 @@ import os
 import json
 from typing import Dict, List
 
-class IndexWriter:
+class PartialIndexWriter:
   """
   A class to handle writing the partial index to disk for each worker.
   It creates exactly one index file per worker.
@@ -19,7 +19,7 @@ class IndexWriter:
     os.makedirs(self.index_path, exist_ok=True)
 
     self.index_file_path = os.path.join(
-      self.index_path, f"index_worker_{self.worker_id}.jsonl"
+      self.index_path, f"index_{self.worker_id}.jsonl"
     )
     
     self.file = open(self.index_file_path, "w", encoding="utf-8")

@@ -10,7 +10,7 @@ from typing import List, Dict, Optional
 from indexer.arg_parser import parse_indexer_args
 from indexer.in_memory_indexer import InMemoryIndexer
 from indexer.index_merger import IndexMerger
-from indexer.index_writer import IndexWriter
+from indexer.partial_index_writer import PartialIndexWriter
 from shared.tokenizer import Tokenizer
 
 ONE_MB = 1024 * 1024
@@ -33,7 +33,7 @@ def index_worker(
     stop_event: Event to signal workers to stop.
   """
   indexer = InMemoryIndexer(memory_budget_mb)
-  writer = IndexWriter(index_dir, worker_id)
+  writer = PartialIndexWriter(index_dir, worker_id)
   tokenizer = Tokenizer()
 
   total_tokens = 0
@@ -192,8 +192,8 @@ class Indexer:
     for file in os.listdir(self.index_dir):
       if file.startswith('worker_') and file.endswith('_stats.json'):
         with open(os.path.join(self.index_dir, file), 'r') as stats_fp:
-          stats = json.load(stats_fp)
-          total_tokens += stats.get("total_tokens", 0)
+          partial_stats = json.load(stats_fp)
+          total_tokens += partial_stats.get("total_tokens", 0)
 
     average_tokens_per_document = round(total_tokens / total_documents) if total_documents else 0
 
