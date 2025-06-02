@@ -1,63 +1,106 @@
 import numpy as np
+from typing import Dict
 
 class Scorer:
-    def __init__(self, lexicon, document_index, total_docs=0, avg_doc_length=0, k1=1.5, b=0.75):
-        """
-        Initialize the Scorer with a lexicon.
-        Args:
-            lexicon (dict): Lexicon containing document frequencies for terms.
-            total_docs (int): Total number of documents in the corpus.
-            avg_doc_length (float): Average document length in the corpus.
-            k1 (float): Term frequency saturation parameter.
-            b (float): Length normalization parameter.
-        """
-        self.lexicon = lexicon
-        self.document_index = document_index
-        self.total_docs = total_docs
-        self.avg_doc_length = avg_doc_length
-        self.k1 = k1
-        self.b = b
-        self.idf_cache = {}
+  def __init__(
+    self,
+    lexicon: Dict,
+    document_index: Dict,
+    total_documents: int,
+    average_document_token_count: float,
+    k1: float = 1.5,
+    b: float = 0.75
+  ):
+    """
+    Initialize the Scorer with corpus statistics.
 
-    def idf(self, token):
-        """
-        Compute the IDF for a token, with caching.
-        """
-        if token in self.idf_cache:
-            return self.idf_cache[token]
+    Args:
+      lexicon (Dict): Mapping from token to the document frequency and corpus frequency.
+      document_index (Dict): Mapping from docid to character count and token count.
+      total_documents (int): Total number of documents in the corpus.
+      average_document_token_count (float): Average document token count in the corpus.
+      k1 (float): BM25 term frequency saturation parameter.
+      b (float): BM25 length normalization parameter.
+    """
+    self.lexicon = lexicon
+    self.document_index = document_index
+    self.total_documents = total_documents
+    self.average_document_token_count = average_document_token_count
+    self.k1 = k1
+    self.b = b
+    
+    # Cache for IDF values to avoid recomputation
+    self._idf_cache: Dict[str, float] = {}
 
-        token_info = self.lexicon.get(token)
+  def compute_idf(self, token: str) -> float:
+    """
+    Compute the Inverse Document Frequency (IDF) for a token using BM25 formula.
 
-        df = token_info['doc_frequency']
-        idf = np.log(1 + (self.total_docs - df + 0.5) / (df + 0.5))
+    Args:
+      token (str): Token for which to compute IDF.
 
-        self.idf_cache[token] = idf
-        return idf
+    Returns:
+      float: IDF score.
+    """
+    if token in self._idf_cache:
+      return self._idf_cache[token]
 
-    def tfidf(self, token, term_frequency: int):
-        """
-        Compute TF-IDF score.
-        """
-        token_info = self.lexicon.get(token)
-        if not token_info:
-            return 0.0
+    token_info = self.lexicon.get(token)
+    if not token_info:
+      return 0.0
 
-        document_frequency = token_info['doc_frequency']
-        idf = np.log((self.total_docs + 1) / (document_frequency + 1))
-        return term_frequency * idf
+    df = token_info['document_frequency']
+    idf = np.log(1 + (self.total_documents - df + 0.5) / (df + 0.5))
 
-    def bm25(self, token, term_frequency: int, docid: str):
-        idf = self.idf(token)
-        doc_length = self.document_index[str(docid)]['doc_length']
+    self._idf_cache[token] = idf
+    return idf
 
-        numerator = term_frequency * (self.k1 + 1)
-        denominator = term_frequency + self.k1 * (1 - self.b + self.b * (doc_length / self.avg_doc_length))
+  def compute_tfidf(self, token: str, term_frequency: int, docid: str) -> float:
+    """
+    Compute TF-IDF score for a token in a document.
 
-        return idf * (numerator / denominator) if denominator != 0 else 0.0
+    Args:
+      token (str): Token to score.
+      term_frequency (int): Frequency of token in the document.
+      docid (str): Document ID.
 
+    Returns:
+      float: TF-IDF score.
+    """
+    token_info = self.lexicon.get(token)
+    doc_info = self.document_index.get(docid)
+    if not token_info or not doc_info:
+      return 0.0
 
-if __name__ == "__main__":
-    # Example usage
-    scorer = Scorer('./tmp/term_lexicon.jsonl')
-    print(scorer.lexicon['appl'])  # This will print the loaded lexicon
-    # You can add more functionality to test the scoring methods here.
+    tf = term_frequency / doc_info['token_count']
+    df = token_info['document_frequency']
+    idf = np.log((self.total_documents + 1) / (df + 1))
+
+    return tf * idf
+
+  def compute_bm25(self, token: str, term_frequency: int, docid: str) -> float:
+    """
+    Compute BM25 score for a token in a document.
+
+    Args:
+      token (str): Token to score.
+      term_frequency (int): Frequency of token in the document.
+      docid (str): Document ID.
+
+    Returns:
+      float: BM25 score.
+    """
+    idf = self.compute_idf(token)
+
+    doc_info = self.document_index.get(docid)
+    token_count = doc_info['token_count']
+
+    numerator = term_frequency * (self.k1 + 1)
+    denominator = term_frequency + self.k1 * (
+      1 - self.b + self.b * (token_count / self.average_document_token_count)
+    )
+
+    if denominator == 0:
+      return 0.0
+
+    return idf * (numerator / denominator)

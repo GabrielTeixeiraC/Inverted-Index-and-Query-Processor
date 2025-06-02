@@ -129,12 +129,12 @@ class Processor:
     score = 0.0
     for token in tokens:
       postings = self.inverted_index.get(token, [])
-      for posting_docid, freq in postings:
+      for posting_docid, frequency in postings:
         if posting_docid == docid:
           if self.ranker == "tfidf":
-            score += self.scorer.tfidf(token, freq)
+            score += self.scorer.compute_tfidf(token, frequency)
           elif self.ranker == "bm25":
-            score += self.scorer.bm25(token, freq, docid)
+            score += self.scorer.compute_bm25(token, frequency, docid)
     return score
 
   def _rank_documents(
@@ -184,7 +184,11 @@ class Processor:
     """
     all_docids = set().union(*(self._get_matching_docids(tokens) for tokens in self.query_tokens_list))
 
-    self.scorer.document_index = self._load_document_index(all_docids)
+    self.scorer.document_index = self._load_jsonl_with_filter(
+      "document_index.jsonl",
+      key='id',
+      keys_filter=all_docids
+    )
 
     for i, query in enumerate(self.queries):
       tokens = self.query_tokens_list[i]
