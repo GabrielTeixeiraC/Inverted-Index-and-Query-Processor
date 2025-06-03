@@ -1,6 +1,7 @@
 import heapq
 import json
 import os
+import time
 from typing import List, Dict, Set, Tuple
 
 from processor.arg_parser import parse_processor_args
@@ -13,6 +14,8 @@ class Processor:
     Initializes the Processor, loading the index, queries, tokenizer,
     lexicon, and inverted index. Also prepares the scorer.
     """
+    init_start_time = time.time()
+
     self.index_file_path, self.queries_file_path, self.ranker = parse_processor_args()
     self.index_dir = os.path.dirname(self.index_file_path)
 
@@ -24,8 +27,13 @@ class Processor:
 
     needed_tokens = set().union(*self.query_tokens_list)
 
+    lexicon_start = time.time()
     self.lexicon = self._load_jsonl_with_filter("lexicon.jsonl", key='token', keys_filter=needed_tokens)
+    lexicon_time = time.time() - lexicon_start
+
+    index_start = time.time()
     self.inverted_index = self._load_inverted_index(needed_tokens)
+    index_time = time.time() - index_start
 
     self.scorer = Scorer(
       self.lexicon,
@@ -34,6 +42,12 @@ class Processor:
       self.avg_tokens_per_doc,
       ranker=self.ranker
     )
+
+    init_time = time.time() - init_start_time
+
+    print(f"Processor initialized in {init_time:.4f}s")
+    print(f"  - Lexicon loading: {lexicon_time:.4f}s ({len(self.lexicon)} terms)")
+    print(f"  - Index loading: {index_time:.4f}s ({len(self.inverted_index)} terms)")
 
   def _load_indexing_statistics(self) -> Tuple[int, float]:
     """
@@ -183,24 +197,55 @@ class Processor:
     - Ranks documents.
     - Displays the results.
     """
+    doc_loading_start = time.time()
     all_docids = set().union(*(self._get_matching_docids(tokens) for tokens in self.query_tokens_list))
-
+    
     self.scorer.document_index = self._load_jsonl_with_filter(
       "document_index.jsonl",
       key='id',
       keys_filter=all_docids
     )
+    doc_loading_time = time.time() - doc_loading_start
+    print(f"  - Document index loaded in {doc_loading_time:.4f}s ({len(all_docids)} documents)")
 
+    timing_statistics = []
     for i, query in enumerate(self.queries):
       tokens = self.query_tokens_list[i]
+      # Measure document matching time
+      matching_start = time.time()
       docids = self._get_matching_docids(tokens)
+      matching_time = time.time() - matching_start
 
+      # Measure ranking time
+      ranking_start = time.time()
       if not docids:
-        self._display_results(query, [])
-        continue
+        results = []
+        ranking_time = 0.0
+      else:
+        results = self._rank_documents(tokens, docids)
+        ranking_time = time.time() - ranking_start
 
-      results = self._rank_documents(tokens, docids)
+      # Store timing statistics
+      total_query_time = matching_time + ranking_time
+      timing_statistics.append({
+      'query_id': i,
+      'matching_time': matching_time,
+      'ranking_time': ranking_time,
+      'total_time': total_query_time
+      })
+
       self._display_results(query, results)
+
+    # Print average timing statistics
+    if timing_statistics:
+      avg_matching = sum(stat['matching_time'] for stat in timing_statistics) / len(timing_statistics)
+      avg_ranking = sum(stat['ranking_time'] for stat in timing_statistics) / len(timing_statistics)
+      avg_total = sum(stat['total_time'] for stat in timing_statistics) / len(timing_statistics)
+      
+      print(f"\nQuery Processing Statistics:")
+      print(f"  - Average matching time: {avg_matching:.4f}s")
+      print(f"  - Average ranking time: {avg_ranking:.4f}s")
+      print(f"  - Average total time: {avg_total:.4f}s")
 
 if __name__ == "__main__":
   processor = Processor()

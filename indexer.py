@@ -39,6 +39,11 @@ def index_worker(
   writer = PartialIndexWriter(index_dir, worker_id)
   tokenizer = Tokenizer()
 
+  # Timing measurements
+  tokenization_time = 0.0
+  indexing_time = 0.0
+  writing_time = 0.0
+  
   total_tokens = 0
   total_documents = 0
   # Create a document index file for this worker
@@ -62,7 +67,11 @@ def index_worker(
         docid = doc["id"]
         text = doc["text"]
 
+        # Measure tokenization time
+        tokenization_start = time.time()
         tokens = tokenizer.tokenize(text)
+        tokenization_time += time.time() - tokenization_start
+
         token_count = len(tokens)
         total_tokens += token_count
 
@@ -76,23 +85,35 @@ def index_worker(
         document_index_fp.write(json.dumps(document_metadata) + "\n")
 
         tokens_counter = collections.Counter(tokens)
+
+        # Measure indexing time
+        indexing_start = time.time()
         memory_limit_reached = indexer.index_document(docid, tokens_counter)
+        indexing_time += time.time() - indexing_start
 
         # Check if the memory limit is reached
         if memory_limit_reached:
+          writing_start = time.time()
           writer.write_to_disk(indexer.index)
+          writing_time += time.time() - writing_start
           indexer.reset_index()
 
     # Write any remaining index data to disk
     if indexer.index:
+      writing_start = time.time()
       writer.write_to_disk(indexer.index)
+      writing_time += time.time() - writing_start
+
   # Write worker statistics to a JSON file. This is done here to avoid tokenizing twice.
   with open(os.path.join(index_dir, f'worker_{worker_id}_stats.json'), 'w') as stats_fp:
     json.dump({
-      "total_tokens": total_tokens
+      "total_tokens": total_tokens,
     }, stats_fp)
   
   print(f"Worker {worker_id} finished. Total documents indexed: {total_documents}, Total tokens: {total_tokens}")
+  if worker_id == 0:
+    print("Workers approximate timing statistics:")
+    print(f"Tokenization: {tokenization_time:.2f}s, Indexing: {indexing_time:.2f}s, Writing: {writing_time:.2f}s")
 
 class Indexer:
   """
@@ -188,15 +209,15 @@ class Indexer:
     stats["Average List Size"] = round(average_list_size, 2)
 
     # Print the assignment's required statistics
-    print(stats)
+    print(json.dumps(stats, indent=2))
 
     total_tokens = 0
     for file in os.listdir(self.index_dir):
       if file.startswith('worker_') and file.endswith('_stats.json'):
         with open(os.path.join(self.index_dir, file), 'r') as stats_fp:
-          partial_stats = json.load(stats_fp)
-          total_tokens += partial_stats.get("total_tokens", 0)
-
+          worker_stats = json.load(stats_fp)
+          total_tokens += worker_stats.get("total_tokens", 0)
+    
     average_tokens_per_document = round(total_tokens / total_documents) if total_documents else 0
 
     # Save other useful statistics
@@ -239,22 +260,36 @@ class Indexer:
       process.start()
       processes.append(process)
 
-    start_time = time.time()
+    # Measure overall timing
+    total_start_time = time.time()
+    
     total_documents = self._stream_documents(input_queue, batch_size=1000, number_of_workers=number_of_workers)
 
     for process in processes:
       process.join()
 
+    # Merge the partial indexes
+    merge_start_time = time.time()
     print("Merging inverted indexes...")
     total_postings, number_of_lists = self.index_merger.merge()
+    inverted_merge_time = time.time() - merge_start_time
+    print(f"Inverted index merge time: {inverted_merge_time:.2f} seconds")
+
+    # Merge the document indexes
+    doc_merge_start_time = time.time()
     print("Merging document indexes...")
     self.index_merger.merge_document_indexes()
-    elapsed_time = time.time() - start_time
+    document_merge_time = time.time() - doc_merge_start_time
+    print(f"Document index merge time: {document_merge_time:.2f} seconds")
+
+    total_elapsed_time = time.time() - total_start_time
+
+    print(f"Total indexing time: {total_elapsed_time:.2f} seconds")
 
     # Signal workers to stop
     stop_event.set()
     print("Collecting statistics...")
-    self._collect_statistics(total_postings, number_of_lists, elapsed_time, total_documents)
+    self._collect_statistics(total_postings, number_of_lists, total_elapsed_time, total_documents)
 
 if __name__ == "__main__":
   indexer = Indexer()
