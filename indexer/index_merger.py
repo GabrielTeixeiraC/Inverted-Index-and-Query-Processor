@@ -22,9 +22,9 @@ class IndexMerger:
     self.document_index_path = document_index_path
     self.lexicon_path = lexicon_path
     self.file_pointers: List[TextIO] = []
-    self.heap: List[Tuple[str, List[Tuple[int, int]], TextIO]] = []
+    self.heap: List[Tuple[str, List[Tuple[str, int]], TextIO]] = []
 
-  def _read_next_token_data(self, fp: TextIO) -> Optional[Tuple[str, List[Tuple[int, int]]]]:
+  def _read_next_token_data(self, fp: TextIO) -> Optional[Tuple[str, List[Tuple[str, int]]]]:
     """
     Reads the next token and its postings list from a JSONL file.
 
@@ -32,7 +32,7 @@ class IndexMerger:
       fp (TextIO): File pointer.
 
     Returns:
-      Optional[Tuple[str, List[Tuple[int, int]]]]: (token, postings) or None if EOF.
+      Optional[Tuple[str, List[Tuple[str, int]]]]: (token, postings) or None if EOF.
     """
     line = fp.readline()
     if not line:
@@ -40,13 +40,13 @@ class IndexMerger:
     data = json.loads(line)
     return data["token"], data["postings"]
   
-  def _save_token_to_lexicon(self, token: str, postings: List[Tuple[int, int]], lexicon_fp: TextIO) -> None:
+  def _save_token_to_lexicon(self, token: str, postings: List[Tuple[str, int]], lexicon_fp: TextIO) -> None:
     """
     Saves a token and its statistics to the lexicon file.
     
     Args:
       token (str): The token to save.
-      postings (List[Tuple[int, int]]): The postings list for the token.
+      postings (List[Tuple[str, int]]): The postings list for the token.
       lexicon_fp (TextIO): File pointer to the lexicon file.
     """
     # Write token statistics to lexicon
@@ -73,10 +73,10 @@ class IndexMerger:
     partial_index_files = [
       os.path.join(self.index_dir, f)
       for f in os.listdir(self.index_dir)
-      if f.startswith('index_') and f.endswith('.jsonl')
+      if f.startswith('partial_index_') and f.endswith('.jsonl')
     ]
     
-    self.file_pointers = [open(f, 'r', encoding='utf-8') for f in partial_index_files]
+    self.file_pointers = [open(f, 'r') for f in partial_index_files]
     for fp in self.file_pointers:
       token_data = self._read_next_token_data(fp)
       if token_data:

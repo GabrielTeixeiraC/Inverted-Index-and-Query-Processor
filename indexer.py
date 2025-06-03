@@ -20,6 +20,7 @@ def index_worker(
   memory_budget_mb: int,
   input_queue: Queue,
   worker_id: int,
+  number_of_workers: int,
   stop_event
 ) -> None:
   """
@@ -30,8 +31,10 @@ def index_worker(
     memory_budget_mb (int): Max memory for in-memory indexer (in MB).
     input_queue (Queue): Queue with document batches.
     worker_id (int): ID of the worker.
+    number_of_workers (int): Total number of workers. Just for logging.
     stop_event: Event to signal workers to stop.
   """
+  print(f"Worker {worker_id} started with memory budget: {memory_budget_mb} MB")
   indexer = InMemoryIndexer(memory_budget_mb)
   writer = PartialIndexWriter(index_dir, worker_id)
   tokenizer = Tokenizer()
@@ -44,7 +47,6 @@ def index_worker(
     while not stop_event.is_set():
       try:
         # Get a batch of documents from the input queue
-        print(f"[Worker {worker_id}] Waiting for input...")
         batch = input_queue.get(timeout=1)
       except Exception:
         continue
@@ -52,8 +54,10 @@ def index_worker(
         break
 
       for doc in batch:
-        if total_documents % 1000 == 0:
-          print(f"\r[Streamer] {total_documents} documents processed...")
+        if worker_id == 0 and total_documents % 1000 == 0:
+          # Print progress assuming equal distribution of documents across workers
+          print(f"Approximately {total_documents * number_of_workers} documents indexed so far")
+
         total_documents += 1
         docid = doc["id"]
         text = doc["text"]
@@ -82,15 +86,13 @@ def index_worker(
     # Write any remaining index data to disk
     if indexer.index:
       writer.write_to_disk(indexer.index)
-  print(f"\n[Worker {worker_id}] Processed {total_documents} documents with {total_tokens} tokens.")
   # Write worker statistics to a JSON file. This is done here to avoid tokenizing twice.
   with open(os.path.join(index_dir, f'worker_{worker_id}_stats.json'), 'w') as stats_fp:
     json.dump({
       "total_tokens": total_tokens
     }, stats_fp)
-
-  writer.close()
-  print(f"\n[Worker {worker_id}] Finished processing {total_documents} documents with {total_tokens} tokens.")
+  
+  print(f"Worker {worker_id} finished. Total documents indexed: {total_documents}, Total tokens: {total_tokens}")
 
 class Indexer:
   """
@@ -232,7 +234,7 @@ class Indexer:
     for worker_id in range(number_of_workers):
       process = Process(
         target=index_worker,
-        args=(self.index_dir, functional_memory_budget_per_worker, input_queue, worker_id, stop_event)
+        args=(self.index_dir, functional_memory_budget_per_worker, input_queue, worker_id, number_of_workers, stop_event)
       )
       process.start()
       processes.append(process)

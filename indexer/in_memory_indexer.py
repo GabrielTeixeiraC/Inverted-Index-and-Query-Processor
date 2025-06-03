@@ -30,18 +30,18 @@ class InMemoryIndexer:
     # (40 bytes for the tuple itself and 2 * 8 bytes for the integers pointers).
     # Therefore, the total size in bytes is: 56 + 2 * 28 = 112 bytes.
     self.entry_size = sys.getsizeof((0, 0)) + 2 * sys.getsizeof(0)
-    print(f"Estimated entry size: {self.entry_size} bytes") 
+    
     # Calculate the approximate maximum number of entries that can be stored in the
     # index before reaching the memory budget.
     self.entry_count = 0
     self.max_entries = (memory_budget_mb * ONE_MB) // self.entry_size
 
-  def index_document(self, docid: int, tokens_frequency_dict: Dict[str, int]) -> bool:
+  def index_document(self, docid: str, tokens_frequency_dict: Dict[str, int]) -> bool:
     """
     Index a single document into the in-memory index.
 
     Args:
-      docid (int): Document identifier.
+      docid (str): Document identifier.
       token_frequencies (Dict[str, int]): Mapping from token to its frequency in the document.
 
     Returns:

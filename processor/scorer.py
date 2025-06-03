@@ -9,7 +9,8 @@ class Scorer:
     total_documents: int,
     average_document_token_count: float,
     k1: float = 1.5,
-    b: float = 0.75
+    b: float = 0.75,
+    ranker: str = "bm25"
   ):
     """
     Initialize the Scorer with corpus statistics.
@@ -28,31 +29,37 @@ class Scorer:
     self.average_document_token_count = average_document_token_count
     self.k1 = k1
     self.b = b
+    self.ranker = ranker
     
     # Cache for IDF values to avoid recomputation
     self._idf_cache: Dict[str, float] = {}
 
   def compute_idf(self, token: str) -> float:
     """
-    Compute the Inverse Document Frequency (IDF) for a token using BM25 formula.
-
-    Args:
-      token (str): Token for which to compute IDF.
+    Compute the IDF based on the selected ranker (BM25 or TF-IDF).
 
     Returns:
       float: IDF score.
     """
-    if token in self._idf_cache:
-      return self._idf_cache[token]
+    key = (self.ranker, token)
+
+    if key in self._idf_cache:
+      return self._idf_cache[key]
 
     token_info = self.lexicon.get(token)
     if not token_info:
       return 0.0
 
     df = token_info['document_frequency']
-    idf = np.log(1 + (self.total_documents - df + 0.5) / (df + 0.5))
 
-    self._idf_cache[token] = idf
+    if self.ranker == "bm25":
+      idf = np.log(1 + (self.total_documents - df + 0.5) / (df + 0.5))
+    elif self.ranker == "tfidf":
+      idf = np.log((self.total_documents + 1) / (df + 1))
+    else:
+      raise ValueError(f"Unknown ranker: {self.ranker}. Use 'bm25' or 'tfidf'.")
+
+    self._idf_cache[key] = idf
     return idf
 
   def compute_tfidf(self, token: str, term_frequency: int, docid: str) -> float:
@@ -67,14 +74,12 @@ class Scorer:
     Returns:
       float: TF-IDF score.
     """
-    token_info = self.lexicon.get(token)
     doc_info = self.document_index.get(docid)
-    if not token_info or not doc_info:
-      return 0.0
+    if not doc_info:
+        return 0.0
 
     tf = term_frequency / doc_info['token_count']
-    df = token_info['document_frequency']
-    idf = np.log((self.total_documents + 1) / (df + 1))
+    idf = self.compute_idf(token)
 
     return tf * idf
 

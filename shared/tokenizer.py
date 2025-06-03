@@ -1,6 +1,5 @@
-import collections
-from typing import List
 import nltk
+from typing import List
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer 
 from nltk.tokenize import word_tokenize
@@ -40,6 +39,6 @@ class Tokenizer:
     tokens = word_tokenize(text)
 
     # Remove punctuation, convert to lowercase and stem the words
-    tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.isalnum() and word.lower() not in self.stop_words and len(word) > 2]
+    tokens = [self.stemmer.stem(word.lower()) for word in tokens if word.lower() not in self.stop_words]
 
     return tokens
