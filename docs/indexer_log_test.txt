@@ -1,0 +1,81 @@
+Indexer test log started.
+
+========================
+Testing with 1 processes
+========================
+Indexing with 1 processes took 1579.95 seconds, functional memory: 723 MB
+
+========================
+Testing with 2 processes
+========================
+Indexing with 2 processes took 799.25 seconds, functional memory: 341 MB
+
+========================
+Testing with 3 processes
+========================
+Indexing with 3 processes took 543.40 seconds, functional memory:  214 MB 
+
+========================
+Testing with 4 processes
+========================
+Indexing with 4 processes took 415.55 seconds, functional memory: 151 MB
+
+========================
+Testing with 5 processes
+========================
+Indexing with 5 processes took 342.52 seconds, functional memory: 113 MB 
+
+========================
+Testing with 6 processes
+========================
+Indexing with 6 processes took 297.29 seconds, functional memory: 87 MB
+
+========================
+Testing with 7 processes
+========================
+Indexing with 7 processes took 267.82 seconds, functional memory: 69 MB
+
+========================
+Testing with 8 processes
+========================
+Indexing with 8 processes took 246.88 seconds, functional memory: 55 MB
+
+========================
+Testing with 9 processes
+========================
+Indexing with 9 processes took 229.31 seconds, functional memory: 44 MB
+
+========================
+Testing with 10 processes
+========================
+Indexing with 10 processes took 218.56 seconds, functional memory: 36 MB
+
+========================
+Testing with 11 processes
+========================
+Indexing with 11 processes took 208.22 seconds, functional memory: 29 MB
+
+========================
+Testing with 12 processes
+========================
+Indexing with 12 processes took 200.19 seconds, functional memory: 23 MB
+
+========================
+Testing with 13 processes
+========================
+Indexing with 13 processes took 193.60 seconds, functional memory: 18 MB
+
+========================
+Testing with 14 processes
+========================
+Indexing with 14 processes took 185.76 seconds, functional memory: 14 MB 
+
+========================
+Testing with 15 processes
+========================
+Indexing with 15 processes took 184.73 seconds, functional memory: 10 MB
+
+========================
+Testing with 16 processes
+========================
+Indexing with 16 processes took 181.20 seconds, functional memory: 7 MB

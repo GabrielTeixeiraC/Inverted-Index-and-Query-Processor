@@ -1,0 +1,298 @@
+\documentclass[sigconf]{acmart}
+\usepackage{float}
+
+\title{Parallel Inverted Index Construction and Query Processing System}
+
+\author{Gabriel Teixeira Carvalho}
+\affiliation{%
+  \institution{Universidade Federal de Minas Gerais}
+  \city{Belo Horizonte}
+  \state{MG}
+  \country{Brazil}
+}
+\email{gteixeiraca@gmail.com}
+
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+\begin{document}
+
+\begin{abstract}
+This report presents the design and implementation of a parallel inverted index construction and query processing system for information retrieval. The system leverages multiprocessing to efficiently build inverted indexes from large-scale document collections while adhering to memory constraints. It processes 4.64 million documents in roughly 7 minutes, achieving significant speedups through parallelism. We analyze the computational complexity of key components, evaluate empirical performance, and characterize the generated inverted index. Additionally, the system supports TF-IDF and BM25 ranking functions for robust query processing, which we analyze in terms of score distributions and retrieval effectiveness.
+\end{abstract}
+
+\keywords{Information Retrieval, Inverted Index, Parallel Processing, TF-IDF, BM25}
+
+\maketitle
+\acmConference{Information Retrieval Project Report}{June 2025}{Belo Horizonte, MG, Brazil}
+
+\section{Introduction}
+Inverted indexes are foundational data structures in information retrieval systems, enabling efficient search over large text collections. This report describes the design and implementation of a parallel inverted indexing system that efficiently constructs indexes while adhering to memory constraints. Furthermore, the system supports robust query processing using widely adopted ranking functions, including TF-IDF and BM25.
+
+The architecture leverages multiprocessing, memory-aware in-memory indexing, and external merge algorithms to handle large datasets. The system is capable of indexing millions of documents with constrained memory and delivering fast query responses.
+
+To validate the implementation, we conducted experiments on a corpus of 4.64 million Wikipedia documents, achieving an indexing time of approximately 7 minutes with a total memory budget of 1024 MB. The system demonstrates efficient memory usage, parallel speedup, and effective query processing capabilities.
+
+\section{Data Structures and Algorithms}
+
+\subsection{Indexing}
+The Indexer adopts a producer-consumer architecture with multiple worker processes. The main process reads documents from the corpus and distributes them to workers via a shared queue. Each worker retrieves document batches from the queue, tokenizes the text and builds a local in-memory inverted index, periodically flushing it to disk when a configurable memory threshold is reached. They also collect indexing statistics that are later used in the query processing phase. The following components are implemented:
+
+\subsubsection{Tokenizer}
+The \texttt{Tokenizer} class uses NLTK for text preprocessing, applying:
+\begin{itemize}
+    \item Word tokenization with \texttt{word\_tokenize}.
+    \item Lowercasing and retaining only alphanumeric tokens.
+    \item Stopword removal based on the NLTK English stopword list.
+    \item Snowball stemming.
+\end{itemize}
+
+\subsubsection{In-Memory Indexer}
+The \texttt{InMemoryIndexer} maintains an inverted index using a Python \texttt{dict} mapping terms to lists of \texttt{(docID, frequency)} tuples. To control memory usage, the system implements a dynamic memory estimation mechanism that tracks the approximate memory footprint of the index structure.
+The memory management approach employs the following techniques:
+\begin{itemize}
+  \item \textbf{Dynamic Memory Estimation}: Uses Python's \texttt{sys.getsizeof} function to calculate the actual memory consumption of index components.
+  \item \textbf{Conservative Memory Budget}: Sets the flush threshold to 80\% of the allocated memory per worker to prevent memory overflow.
+  \item \textbf{Entry-Based Monitoring}: Tracks the number of posting entries as a proxy for memory usage.
+\end{itemize}
+
+\subsubsection{Memory Calculation}
+The system estimates memory usage based on the structure of posting entries. Each entry consists of a \texttt{(docID, frequency)} tuple, where both components are integers. The memory footprint calculation considers:
+\begin{itemize}
+  \item \textbf{Tuple Overhead}: 40 bytes for the tuple object itself.
+  \item \textbf{Integer Storage}: 28 bytes per integer in 64-bit Python (including object overhead).
+  \item \textbf{Pointer References}: 8 bytes per integer pointer within the tuple.
+\end{itemize}
+
+The total memory per entry is computed as:
+\[
+\text{entry\_size} = 40 + 2 \times 28 + 2 \times 8 = 112 \text{ bytes}
+\]
+
+Given the memory budget per worker, the maximum number of entries before flushing is:
+\[
+\text{max\_entries} = \frac{\text{memory\_budget\_MB} \times 1,048,576 \times 0.8}{112}
+\]
+
+This approach is validated by the empirical observations that the average posting list length is approximately 30 entries per term, indicating that posting entries significantly outnumber unique terms in the index structure and justifying this strategy. Further discussion on indexing characteristics is provided in Section \ref{index-characterization}.
+
+\subsubsection{Index Writer}
+The \texttt{IndexWriter} writes partial inverted indexes to disk in JSONL format. Each worker maintains its own set of index files, avoiding synchronization overhead. Terms are sorted alphabetically before writing to simplify the merge process.
+
+\subsubsection{Index Merger}
+The \texttt{IndexMerger} performs an external k-way merge using a min-heap to combine sorted partial indexes from different workers. The merger processes terms in lexicographic order, consolidates their posting lists, and generates:
+\begin{itemize}
+    \item A final inverted index file.
+    \item A lexicon file containing term-level statistics (document frequency, corpus frequency).
+    \item A document index file mapping document IDs to metadata (e.g., Character and Token counts).
+\end{itemize}
+
+The merge algorithm consists of:
+\begin{enumerate}
+    \item Initializing the heap with the first term from each partial index.
+    \item Extracting the smallest term and merging all its posting lists.
+    \item Sorting the merged postings by document ID for consistency.
+    \item Writing the merged term and its postings to the final index.
+    \item Reading the next term from the corresponding file and repeating until all terms are processed.
+\end{enumerate}
+
+\subsection{Query Processing}
+The Query Processor supports ranked retrieval using TF-IDF and BM25. It retrieves only the necessary inverted index, lexicon and document index entries for the query terms, computes relevance using the \texttt{Scorer} class, and returns a ranked list of documents, displaying the top-k results based on the computed scores.
+
+\subsubsection{Scorer}
+
+The \texttt{Scorer} class computes relevance scores based on:
+\begin{itemize}
+    \item \textbf{TF-IDF}: Log-scaled term frequency and inverse document frequency.
+    \item \textbf{BM25}: Okapi BM25 with parameters $k_1 = 1.5$ and $b = 0.75$.
+\end{itemize}
+It uses the lexicon to retrieve document frequency for each term, the document index to obtain document token counts and the indexing statistics to retrieve the average number of tokens per document and the total number of documents in the corpus. These statistics are essential for computing TFIDF and BM25. To make the scoring efficient, the \texttt{Scorer} class caches inverse document frequencies (IDF) for terms to avoid redundant calculations during query processing.
+
+\section{Computational Complexity}
+
+\subsection{Indexing Phase}
+The indexing process comprises tokenization, in-memory indexing, writing to disk, and merging. Considering $D$ documents, each with an average size of $N$ characters and an average of $L$ tokens, the complexities are as follows:
+\subsubsection{Time Complexity}
+\begin{itemize}
+    \item \textbf{Tokenization}: $O(N)$ per document, therefore $O(D \cdot N)$ for $D$ documents. This includes tokenization, stopword removal, and stemming.
+    \item \textbf{In-memory indexing}: $O(L)$ per document, therefore $O(D \cdot L)$ for $D$ documents.
+    \item \textbf{Index writing}: $O(M \log M + M * WO)$, where $M$ is the number of unique terms in the partial index and $WO$ is the disk write overhead incurred in each I/O operation. The $O(M \log M)$ component accounts for sorting terms alphabetically before writing, while $O(M * WO)$ represents the I/O cost of writing all posting entries to disk.
+  \item \textbf{Index merging}: $O(K \log K + V \log K + T \log T + T \cdot WO)$, where $K$ is the number of partial index files, $T$ is the total number of postings across all partial indexes, and $WO$ is the disk write overhead. The complexity breaks down as follows:
+  \begin{itemize}
+    \item \textit{Heap initialization}: $O(K \log K)$ to insert the first term from each of the $K$ partial index files into the min-heap.
+    \item \textit{Heap operations}: $O(V \log K)$ where $V$ is the total vocabulary size, as each unique term requires heap extraction and potential insertion operations.
+    \item \textit{Postings consolidation}: $O(T)$ to merge posting lists from different workers for the same term.
+    \item \textit{Postings sorting}: $O(T \log T)$ in the worst case, where all postings belong to a single highly frequent term. In practice, this is $O(\sum_{i=1}^{V} P_i \log P_i)$ where $P_i$ is the number of postings for term $i$. Since the average posting list length is small, this step is often dominated by the I/O and heap operations.
+    \item \textit{I/O operations}: $O(T \cdot WO)$ for writing all merged postings to the final index file.
+  \end{itemize}
+\end{itemize}
+
+In practice, the most time-consuming part of the indexing phase was tokenization, which took 238.54 seconds out of a total indexing time of 443.01 seconds. Since it has to process the raw text of each document in the entire corpus, this step is expected to dominate the time complexity.
+ In-memory indexing was relatively fast at 12.87 seconds, while writing partial indexes to disk took 17.51 seconds. The merging step, which aligns with the high theoretical cost due to heap operations and I/O, required 145.51 seconds for the inverted index and 16.12 seconds for the document index.
+
+\subsubsection{Space Complexity}
+The space complexity of the indexing phase is determined by the in-memory index which is $O(M + T)$, where $M$ is the number of unique terms and $T$ is the total number of postings across all terms. This 
+memory complexity is bounded by the memory limit set for the process because the system flushes the in-memory index to disk when it approaches the memory budget.
+
+\subsection{Query Processing}
+
+\subsubsection{Time Complexity}
+The query processing phase involves term lookup, document retrieval, scoring, and ranking. For a query with $q$ terms and $R$ matching documents, the complexities are:
+
+\begin{itemize}
+  \item \textbf{Query tokenization}: $O(N)$ for tokenizing the query string using the same preprocessing pipeline as indexing, where $N$ is the length of the query string.
+  \item \textbf{Index loading}: $O(V + D)$ where $V$ is the vocabulary size and $D$ is the total number of documents. The system iterates through the entire inverted index, lexicon and document index to selectively load only the posting lists for query terms, terms statistics and metadata for matching documents.
+  \item \textbf{Document intersection}: $O(q \cdot P_{avg})$ where $P_{avg}$ is the average posting list length for query terms. The system performs set intersection across posting lists to find documents containing all the query terms.
+  \item \textbf{Score computation}: $O(R \cdot q)$ where each of the $R$ matching documents is scored against all $q$ query terms. This includes TF-IDF or BM25 calculations with cached IDF values.
+  \item \textbf{Result ranking}: $O(R \log k)$ where $k$ is the number of top results to return. The system uses a heap-based approach to extract the top-k results efficiently.
+\end{itemize}
+
+The processor initialization, which includes index loading, took 38.14 seconds in total. Specifically, lexicon loading took 5.37 seconds, index loading 32.75 seconds, and document index loading 5.40 seconds. These numbers confirm that the $O(V + D)$ component dominates initialization, consistent with the complexity analysis.
+
+During query execution, the average total processing time per query was 0.0929 seconds, with matching costing 0.0163 seconds and ranking 0.0766 seconds. 
+
+
+\subsubsection{Space Complexity}
+The space complexity of query processing is determined by:
+
+\begin{itemize}
+    \item \textbf{Query representation}: $O(q)$ for storing tokenized query terms.
+    \item \textbf{Partial index loading}: $O(q \cdot P_{avg})$ for loading only the posting lists corresponding to query terms from the inverted index.
+    \item \textbf{Document metadata}: $O(R)$ for loading document metadata (token counts, character counts) for matching documents from the document index.
+    \item \textbf{Lexicon entries}: $O(q)$ for loading term statistics (document frequency, corpus frequency) for query terms.
+    \item \textbf{Score computation}: $O(R)$ for storing computed scores during ranking.
+    \item \textbf{IDF cache}: $O(q)$ for caching inverse document frequency values to avoid recomputation.
+\end{itemize}
+
+The overall space complexity is:
+\[
+O(q + q \cdot P_{avg} + R + q + R + q) = O(q \cdot P_{avg} + R)
+\]
+
+This selective loading approach significantly reduces memory usage compared to loading the entire inverted index, lexicon, and document index into memory. The system only loads the data structures necessary for processing the specific query terms, making it scalable for large indexes and efficient for query processing.
+\section{Empirical Analysis}
+
+\subsection{Indexing Performance}
+Table~\ref{tab:indexing_performance} shows performance results with varying numbers of worker processes on a corpus of 4.64 million documents.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Processes} & \textbf{Time (s)} & \textbf{Speedup} & \textbf{Memory/Worker (MB)} \\ \hline
+1 & 1579.95 & 1.00 & 723 \\ \hline
+2 & 799.25 & 1.98 & 341 \\ \hline
+4 & 415.55 & 3.80 & 151 \\ \hline
+8 & 246.88 & 6.40 & 55 \\ \hline
+12 & 200.19 & 7.89 & 23 \\ \hline
+16 & 181.20 & 8.72 & 7 \\ \hline
+\end{tabular}
+\caption{Indexing performance across different process counts.}
+\label{tab:indexing_performance}
+\end{table}
+
+The results demonstrate near-linear speedup up to 8 processes, with diminishing returns beyond that point due to I/O bottlenecks. Each new process incurs additional memory overhead (approximately 40 MB), leading to reduced memory per worker as shown in the last column.
+
+\subsection{Memory Efficiency}
+The system successfully controls memory usage per worker. As the number of processes increases, the available memory per worker decreases, leading to more frequent flushes but sustaining stable and efficient operation.
+
+\subsection{Index Characterization} \label{index-characterization}
+The corpus and the indexing statistics are summarized in Table~\ref{tab:index_stats}.
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Metric} & \textbf{Value} \\ \hline
+Total Documents & 4,641,784 \\ \hline
+Average Tokens per Document & 37 \\ \hline
+Total Unique Terms & 4,394,792 \\ \hline
+Average Postings per Term & 30.51 \\ \hline
+Index Size & 2,219.04 MB \\ \hline
+Total Processing Time & 443.92 s \\ \hline
+\end{tabular}
+\caption{Final inverted index statistics.}
+\label{tab:index_stats}
+\end{table}
+
+\section{Query Processing Results}
+
+\subsection{Test Query Analysis}
+
+The system was evaluated using five test queries covering diverse domains and complexity levels. Table~\ref{tab:query_analysis} summarizes the number of documents retrieved for each query using both ranking functions (BM25 and TF-IDF).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Query} & \textbf{BM25 Results} & \textbf{TF-IDF Results} \\ \hline
+\texttt{physics nobel winners since 2000} & 0 & 0 \\ \hline
+\texttt{christopher nolan movies} & 2 & 2 \\ \hline
+\texttt{19th century female authors} & 4 & 4 \\ \hline
+\texttt{german cs universities} & 0 & 0 \\ \hline
+\texttt{radiohead albums} & 10 & 10 \\ \hline
+\end{tabular}
+\caption{Number of matching documents per query for both ranking functions.}
+\label{tab:query_analysis}
+\end{table}
+These were the retrieved documents for each query:
+
+\begin{itemize}
+    \item \textbf{"christopher nolan movies"}
+    \begin{itemize}
+        \item BM25: 1126809, 4137814
+        \item TF-IDF: 1126809, 4137814
+    \end{itemize}
+    
+    \item \textbf{"19th century female authors"}
+    \begin{itemize}
+        \item BM25: 2845496, 0393385, 0824938, 2246783
+        \item TF-IDF: 2845496, 0393385, 0824938, 2246783
+    \end{itemize}
+    
+    \item \textbf{"radiohead albums"}
+    \begin{itemize}
+        \item BM25: \\
+        4095497, 3094193, 3442549, 2289665, 2608716, \\ 
+        3442547, 4264708, 1858807, 1921715, 1946287
+        \item TF-IDF: \\
+        1921715, 0271362, 4095497, 3094190, 3094193, \\ 
+        4264708, 2608716, 2289665, 3442549, 3094209
+    \end{itemize}
+\end{itemize}
+\subsection{Ranking Function Comparison}
+
+\subsubsection{Score Distribution Analysis}
+The two ranking functions exhibit distinctly different score distributions, as shown in Table~\ref{tab:score_stats}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Query} & \multicolumn{2}{c|}{\textbf{BM25}} & \multicolumn{2}{c|}{\textbf{TF-IDF}} \\ \hline
+ & \textbf{Min} & \textbf{Max} & \textbf{Min} & \textbf{Max} \\ \hline
+"christopher nolan movies" & 16.14 & 18.95 & 0.355 & 0.485 \\ \hline
+"19th century female authors" & 14.02 & 16.20 & 0.293 & 0.381 \\ \hline
+"radiohead albums" & 18.39 & 20.62 & 0.770 & 1.007 \\ \hline
+\end{tabular}
+\caption{Score distribution statistics for queries with results.}
+\label{tab:score_stats}
+\end{table}
+
+\subsubsection{Ranking algorithms characteristics}
+BM25 produces significantly higher absolute scores, with values ranging from 14.02 to 20.62 across all queries. TF-IDF produces more conservative scores ranging from 0.293 to 1.007. The score distribution shows:
+\begin{itemize}
+    \item \textbf{Higher score magnitudes}: BM25 scores are approximately 20-50 times larger than TF-IDF scores
+    \item \textbf{Consistent ranking}: The relative ordering of documents remains largely consistent between ranking functions
+    \item \textbf{Lower score variance}: TF-IDF shows more compressed score ranges within each query
+    \item \textbf{Score compression}: BM25's saturation function (controlled by $k_1 = 1.5$) prevents extremely high scores for documents with many term occurrences
+\end{itemize}
+
+
+\section{Conclusion}
+This report presents a scalable and efficient parallel inverted indexing system capable of handling millions of documents under memory constraints. The multiprocessing design achieves significant speedups, scaling efficiently up to 16 processes. The empirical analysis validates both the computational complexity and the memory-aware design.
+
+The produced inverted index demonstrates properties characteristic of natural language corpora, and the query processor supports robust ranked retrieval with both TF-IDF and BM25. The modular design facilitates future enhancements, such as distributed indexing, compression techniques, or support for advanced ranking models.
+
+\end{document}
